@@ -13,6 +13,14 @@ const client = new Client({
   port: 5432,
 });
 
+// Separate client for LISTEN notifications
+const notifyClient = new Client({
+  user: 'etienne',
+  host: 'localhost',
+  database: 'counter_app',
+  port: 5432,
+});
+
 async function initializeDatabase() {
   try {
     await client.connect();
@@ -29,8 +37,33 @@ async function initializeDatabase() {
     }
     
     console.log('Database initialized successfully');
+    
+    // Set up notification listener
+    await setupNotificationListener();
   } catch (err) {
     console.error('Database initialization error:', err);
+  }
+}
+
+async function setupNotificationListener() {
+  try {
+    await notifyClient.connect();
+    
+    // Listen for counter_updated notifications
+    await notifyClient.query('LISTEN counter_updated');
+    
+    // Handle notifications
+    notifyClient.on('notification', (msg) => {
+      if (msg.channel === 'counter_updated') {
+        const counter = parseInt(msg.payload);
+        console.log(`Database notification: counter updated to ${counter}`);
+        broadcastCounterUpdate(counter);
+      }
+    });
+    
+    console.log('Notification listener set up successfully');
+  } catch (err) {
+    console.error('Error setting up notification listener:', err);
   }
 }
 
@@ -83,7 +116,6 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ counter }));
   } else if (req.url === '/increment' && req.method === 'POST') {
     const counter = await incrementCounter();
-    broadcastCounterUpdate(counter);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ counter }));
   } else if (req.url === '/events' && req.method === 'GET') {
