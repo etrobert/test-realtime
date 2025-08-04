@@ -3,6 +3,9 @@ const fs = require('fs');
 const path = require('path');
 const { Client } = require('pg');
 
+// Track SSE clients
+let sseClients = [];
+
 const client = new Client({
   user: 'etienne',
   host: 'localhost',
@@ -51,6 +54,18 @@ async function incrementCounter() {
   }
 }
 
+function broadcastCounterUpdate(counter) {
+  const data = `data: ${JSON.stringify({ counter })}\n\n`;
+  sseClients.forEach((client, index) => {
+    try {
+      client.write(data);
+    } catch (err) {
+      console.log('Removing disconnected SSE client');
+      sseClients.splice(index, 1);
+    }
+  });
+}
+
 const server = http.createServer(async (req, res) => {
   if (req.url === '/' && req.method === 'GET') {
     fs.readFile(path.join(__dirname, 'index.html'), (err, data) => {
@@ -68,8 +83,27 @@ const server = http.createServer(async (req, res) => {
     res.end(JSON.stringify({ counter }));
   } else if (req.url === '/increment' && req.method === 'POST') {
     const counter = await incrementCounter();
+    broadcastCounterUpdate(counter);
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ counter }));
+  } else if (req.url === '/events' && req.method === 'GET') {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Cache-Control'
+    });
+    
+    sseClients.push(res);
+    
+    const counter = await getCounter();
+    res.write(`data: ${JSON.stringify({ counter })}\n\n`);
+    
+    req.on('close', () => {
+      sseClients = sseClients.filter(client => client !== res);
+      console.log('SSE client disconnected');
+    });
   } else {
     res.writeHead(404);
     res.end('Not found');
